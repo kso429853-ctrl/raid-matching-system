@@ -17,7 +17,6 @@ JOB_DETAILS = {
 if 'users' not in st.session_state: st.session_state.users = []
 if 'raids' not in st.session_state: st.session_state.raids = {}
 if 'comp_count' not in st.session_state: st.session_state.comp_count = 0
-# 시간대를 딕셔너리 형태로 저장하여 레이드별 분류 가능하게 수정
 if 'schedules' not in st.session_state: st.session_state.schedules = [] 
 if 'apply_success' not in st.session_state: st.session_state.apply_success = False
 
@@ -32,17 +31,14 @@ if menu == "사용자 신청":
     if st.session_state.apply_success:
         st.success("🎉 성공적으로 신청이 완료되었습니다!")
         st.balloons() 
-        if st.button("확인"):
+        if st.button("초기 화면으로 돌아가기"):
             st.session_state.apply_success = False
             st.session_state.comp_count = 0
             st.rerun()
     else:
         st.header("📝 레이드 참가 신청")
         
-        # 레이드 종류 먼저 선택
         req_type = st.selectbox("먼저 참여할 레이드를 골라주세요", ["루드라", "침식"])
-        
-        # 선택한 레이드에 맞는 시간대만 필터링
         filtered_schedules = [s['time'] for s in st.session_state.schedules if s['type'] == req_type]
         
         if not filtered_schedules:
@@ -100,21 +96,45 @@ if menu == "사용자 신청":
                         st.session_state.apply_success = True
                         st.rerun()
 
-# --- 2. 현재 신청 현황 페이지 ---
+# --- 2. 현재 신청 현황 페이지 (일반 유저용 깔끔한 UI) ---
 elif menu == "현재 신청 현황":
     st.header("📊 현재 신청 현황")
-    if not st.session_state.users:
+    if not st.session_state.schedules:
+        st.info("현재 등록된 레이드 시간대가 없습니다.")
+    elif not st.session_state.users:
         st.info("현재 접수된 신청이 없습니다.")
     else:
-        df = pd.DataFrame(st.session_state.users)
-        st.subheader("📌 레이드 및 시간대별 신청 요약")
-        summary_df = df.groupby(['레이드종류', '시간대', '분류']).size().unstack(fill_value=0)
-        st.dataframe(summary_df, use_container_width=True)
+        # 레이드 및 시간대 먼저 선택
+        c1, c2 = st.columns(2)
+        with c1: 
+            view_type = st.selectbox("조회할 레이드", ["루드라", "침식"])
         
-        st.markdown("---")
-        st.subheader("📋 세부 신청자 명단")
-        display_df = df[['레이드종류', '시간대', '분류', '세부직업', '닉네임', '전투력', '고정']]
-        st.dataframe(display_df, use_container_width=True)
+        view_schedules = [s['time'] for s in st.session_state.schedules if s['type'] == view_type]
+        with c2:
+            if view_schedules:
+                view_sch = st.selectbox("조회할 시간대", view_schedules)
+            else:
+                st.warning("해당 레이드의 등록된 시간대가 없습니다.")
+                view_sch = None
+                
+        if view_sch:
+            # 선택한 레이드/시간대의 신청자만 필터링
+            filtered_users = [u for u in st.session_state.users if u['레이드종류'] == view_type and u['시간대'] == view_sch]
+            
+            if not filtered_users:
+                st.info("이 시간대에 아직 신청한 인원이 없습니다.")
+            else:
+                st.markdown("---")
+                st.subheader(f"📋 [{view_type} | {view_sch}] 신청자 명단")
+                
+                df = pd.DataFrame(filtered_users)
+                
+                # 불필요한 관리자용 열(분류, 고정, 비밀번호 등) 모두 제거하고 심플하게 표시
+                display_df = df[['닉네임', '세부직업', '전투력']]
+                
+                # 인덱스를 1부터 시작하도록 깔끔하게 정리
+                display_df.index = range(1, len(display_df) + 1)
+                st.table(display_df)
 
 # --- 3. 신청 취소 페이지 ---
 elif menu == "신청 취소":
@@ -127,15 +147,16 @@ elif menu == "신청 취소":
             st.session_state.users = [u for u in st.session_state.users if u['그룹ID'] != target_gid]
             for r_name in st.session_state.raids:
                 st.session_state.raids[r_name]['fixed'] = [f for f in st.session_state.raids[r_name]['fixed'] if f.get('그룹ID') != target_gid]
-            st.success("삭제되었습니다.")
+            st.success("성공적으로 신청이 취소되었습니다.")
         else:
-            st.error("정보가 일치하지 않습니다.")
+            st.error("닉네임 또는 비밀번호가 일치하지 않습니다.")
 
 # --- 4. 관리자 설정 페이지 ---
 elif menu == "관리자 설정":
     st.header("👑 관리자 페이지")
     if st.text_input("관리자 암호", type="password") == ADMIN_PASSWORD:
         
+        # 1. 요일 및 시간대 관리
         st.subheader("⏰ 레이드별 요일 및 시간대 관리")
         col_s1, col_s2 = st.columns(2)
         with col_s1:
@@ -154,41 +175,23 @@ elif menu == "관리자 설정":
                 sch_list = [f"{s['type']} | {s['time']}" for s in st.session_state.schedules]
                 del_target = st.selectbox("삭제할 항목 선택", sch_list)
                 if st.button("선택 항목 삭제"):
-                    # 데이터 분리
                     d_type, d_time = del_target.split(" | ")
-                    # 시간대 리스트에서 삭제
                     st.session_state.schedules = [s for s in st.session_state.schedules if not (s['type'] == d_type and s['time'] == d_time)]
-                    # [핵심] 해당 레이드와 시간대가 모두 일치하는 신청자만 삭제
                     st.session_state.users = [u for u in st.session_state.users if not (u['레이드종류'] == d_type and u['시간대'] == d_time)]
-                    # 고정 인원에서도 삭제
                     for r_name in st.session_state.raids:
                         st.session_state.raids[r_name]['fixed'] = [f for f in st.session_state.raids[r_name]['fixed'] if not (f.get('레이드종류') == d_type and f.get('시간대') == d_time)]
-                    
-                    st.warning(f"{del_target} 관련 모든 데이터가 정리되었습니다.")
+                    st.warning(f"{del_target} 관련 모든 데이터 삭제 완료")
                     st.rerun()
         
         st.markdown("---")
         
-        # 관리자 직권 취소
-        st.subheader("🗑️ 관리자 직권 유저 취소")
-        if st.session_state.users:
-            del_user = st.selectbox("취소할 신청자 선택", [f"{u['닉네임']} ({u['레이드종류']}/{u['시간대']})" for u in st.session_state.users])
-            if st.button("해당 유저 강제 취소"):
-                target_name = del_user.split(" (")[0]
-                target_gid = next((u['그룹ID'] for u in st.session_state.users if u['닉네임'] == target_name), None)
-                if target_gid:
-                    st.session_state.users = [u for u in st.session_state.users if u['그룹ID'] != target_gid]
-                    st.success(f"취소 완료")
-                    st.rerun()
-        
-        st.markdown("---")
+        # 2. 공격대 구성 설정
         st.subheader("⚔️ 공격대 구성 설정 (총 8명 고정)")
         if not st.session_state.schedules:
             st.error("시간대를 먼저 추가해주세요.")
         else:
             with st.expander("새 공격대 추가/수정"):
                 r_type = st.selectbox("대상 레이드", ["루드라", "침식"], key="raid_sel")
-                # 선택한 레이드에 맞는 시간대만 옵션으로 제공
                 r_sch_opts = [s['time'] for s in st.session_state.schedules if s['type'] == r_type]
                 r_sch = st.selectbox("대상 시간대", r_sch_opts)
                 r_name = st.text_input("공격대 이름", placeholder="예: 1공대")
@@ -208,17 +211,28 @@ elif menu == "관리자 설정":
                         }
                         st.success("저장 완료")
 
-            # 고정 인원 지정
-            if st.session_state.users and st.session_state.raids:
-                st.markdown("---")
-                st.subheader("📌 특정 인원 공대 고정")
-                u_opts = [f"{u['닉네임']} ({u['레이드종류']} | {u['시간대']})" for u in st.session_state.users if not u['고정']]
+        st.markdown("---")
+
+        # 3. 신청자 명단 및 관리 (리스트, 고정, 취소 통합)
+        st.subheader("👥 신청자 명단 및 특별 관리")
+        if not st.session_state.users:
+            st.info("현재 접수된 신청자가 없습니다.")
+        else:
+            # 관리자용이므로 전체 정보(비밀번호 제외) 표시
+            admin_df = pd.DataFrame(st.session_state.users)[['레이드종류', '시간대', '닉네임', '세부직업', '분류', '전투력', '고정', '배정공대']]
+            st.dataframe(admin_df, use_container_width=True)
+
+            c_manage1, c_manage2 = st.columns(2)
+            
+            with c_manage1:
+                st.markdown("**📌 특정 인원 공대 고정**")
+                unfixed_users = [f"{u['닉네임']} ({u['레이드종류']} | {u['시간대']})" for u in st.session_state.users if not u['고정']]
                 r_opts = [f"{r} ({v['type']} | {v['schedule']})" for r, v in st.session_state.raids.items()]
-                if u_opts and r_opts:
-                    c_u, c_r = st.columns(2)
-                    with c_u: target_u = st.selectbox("사용자 선택", u_opts)
-                    with c_r: target_r = st.selectbox("공대 선택", r_opts)
-                    if st.button("고정 확정"):
+                
+                if unfixed_users and r_opts:
+                    target_u = st.selectbox("고정할 사용자 선택", unfixed_users)
+                    target_r = st.selectbox("공대 선택", r_opts)
+                    if st.button("공대 고정 확정"):
                         u_n = target_u.split(" (")[0]
                         r_n = target_r.split(" (")[0]
                         raid_conf = st.session_state.raids[r_n]
@@ -228,9 +242,26 @@ elif menu == "관리자 설정":
                                     u['고정'] = True
                                     u['배정공대'] = r_n
                                     st.session_state.raids[r_n]['fixed'].append(u)
-                                    st.success("고정 완료")
+                                    st.success(f"{u_n}님 고정 완료")
+                                    st.rerun()
                                 else:
                                     st.error("레이드 종류나 시간대가 일치하지 않습니다.")
+                else:
+                    st.caption("고정할 사용자나 생성된 공격대가 부족합니다.")
+
+            with c_manage2:
+                st.markdown("**🗑️ 신청자 강제 취소 (일행 포함)**")
+                all_users = [f"{u['닉네임']} ({u['레이드종류']} | {u['시간대']})" for u in st.session_state.users]
+                del_user = st.selectbox("취소할 사용자 선택", all_users)
+                if st.button("강제 취소 실행"):
+                    target_name = del_user.split(" (")[0]
+                    target_gid = next((u['그룹ID'] for u in st.session_state.users if u['닉네임'] == target_name), None)
+                    if target_gid:
+                        st.session_state.users = [u for u in st.session_state.users if u['그룹ID'] != target_gid]
+                        for r_name in st.session_state.raids:
+                            st.session_state.raids[r_name]['fixed'] = [f for f in st.session_state.raids[r_name]['fixed'] if f.get('그룹ID') != target_gid]
+                        st.success(f"{target_name}님의 신청이 취소되었습니다.")
+                        st.rerun()
 
 # --- 5. 매칭 결과 페이지 ---
 elif menu == "매칭 결과":
@@ -238,7 +269,7 @@ elif menu == "매칭 결과":
     if not st.session_state.raids:
         st.warning("공격대 설정이 없습니다.")
     else:
-        f_type = st.selectbox("필터", ["전체", "루드라", "침식"])
+        f_type = st.selectbox("조회할 레이드 필터", ["전체", "루드라", "침식"])
         if st.button("전체 랜덤 매칭 시작"):
             available_users = [u.copy() for u in st.session_state.users]
             final_raids = {}
