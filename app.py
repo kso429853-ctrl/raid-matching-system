@@ -7,22 +7,19 @@ import os
 
 st.set_page_config(page_title="CONTROL 레이드 신청", layout="wide")
 
-# --- 공통 데이터베이스(JSON) 연동 ---
+# --- 데이터베이스(JSON) 연동 ---
 DATA_FILE = "raid_data.json"
 
 def load_data():
-    """파일에서 데이터를 불러옵니다. 파일이 없으면 초기 상태를 반환합니다."""
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {"users": [], "raids": {}, "schedules": [], "confirmed_matches": {}}
 
 def save_data(data):
-    """데이터를 파일에 실시간으로 저장합니다."""
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-# 스크립트가 실행될 때마다 가장 최신 데이터를 불러옴 (모든 유저 동기화)
 db = load_data()
 
 # --- 직업 데이터 정의 ---
@@ -33,7 +30,7 @@ JOB_DETAILS = {
     "호법성": "호법성"
 }
 
-# --- 개인 UI 상태 (이것들은 개인 브라우저에만 유지되어야 함) ---
+# --- 개인 세션 상태 ---
 if 'comp_count' not in st.session_state: st.session_state.comp_count = 0
 if 'apply_success' not in st.session_state: st.session_state.apply_success = False
 if 'preview_result' not in st.session_state: st.session_state.preview_result = None
@@ -49,24 +46,21 @@ if menu == "사용자 신청":
     if st.session_state.apply_success:
         st.success("🎉 성공적으로 신청이 완료되었습니다!")
         st.balloons() 
-        if st.button("초기 화면으로 돌아가기"):
+        if st.button("확인"):
             st.session_state.apply_success = False
             st.session_state.comp_count = 0
             st.rerun()
     else:
         st.header("📝 레이드 참가 신청")
         req_type = st.selectbox("참여할 레이드 선택", ["루드라", "침식"])
-        # 글로벌 DB에서 시간대 불러오기
         filtered_schedules = [s['time'] for s in db['schedules'] if s['type'] == req_type]
         
         if not filtered_schedules:
             st.error(f"🚫 현재 {req_type} 레이드의 시간대가 없습니다.")
         else:
-            st.info("💡 일행이 있다면 ➕ 버튼을 눌러 인원을 추가하세요.")
-            col1, col2, col3 = st.columns([1, 1, 3])
+            col1, col2 = st.columns([1, 4])
             with col1:
                 if st.button("➕ 동반자 추가"): st.session_state.comp_count += 1
-            with col2:
                 if st.button("➖ 동반자 제거") and st.session_state.comp_count > 0: st.session_state.comp_count -= 1
 
             with st.form("apply_form"):
@@ -89,7 +83,7 @@ if menu == "사용자 신청":
                     with cc2: c_job = st.selectbox("직업", list(JOB_DETAILS.keys()), key=f"cj_{i}")
                     with cc3: c_power = st.number_input("전투력", min_value=0, step=100, key=f"cp_{i}")
                     with cc4: c_type = st.radio("조건", ["같은 파티 희망", "같은 공격대 희망"], key=f"ct_{i}")
-                    comp_data.append({"name": c_name, "job": c_job, "power": c_power, "type": c_type})
+                    comp_data.append({"name": c_name, "job": c_job, "power": c_power, "type": c_type, "relation": f"{name}의 동반자"})
 
                 if st.form_submit_button("신청하기"):
                     if any(u['닉네임'] == name for u in db['users']):
@@ -101,16 +95,16 @@ if menu == "사용자 신청":
                         db['users'].append({
                             "닉네임": name, "세부직업": job, "분류": JOB_DETAILS[job], 
                             "전투력": power, "레이드종류": req_type, "시간대": req_schedule,
-                            "비밀번호": u_pw, "그룹ID": gid, "고정": False, "배정공대": None
+                            "비밀번호": u_pw, "그룹ID": gid, "관계": "본인(대표)", "조건": "없음", "고정": False, "배정공대": None
                         })
                         for c in comp_data:
                             if c['name']:
                                 db['users'].append({
                                     "닉네임": c['name'], "세부직업": c['job'], "분류": JOB_DETAILS[c['job']], 
                                     "전투력": c['power'], "레이드종류": req_type, "시간대": req_schedule,
-                                    "비밀번호": u_pw, "그룹ID": gid, "고정": False, "배정공대": None
+                                    "비밀번호": u_pw, "그룹ID": gid, "관계": c['relation'], "조건": c['type'], "고정": False, "배정공대": None
                                 })
-                        save_data(db) # 글로벌 DB 저장
+                        save_data(db)
                         st.session_state.apply_success = True
                         st.rerun()
 
@@ -129,9 +123,7 @@ elif menu == "현재 신청 현황":
             filtered = [u for u in db['users'] if u['레이드종류'] == v_type and u['시간대'] == v_sch]
             if not filtered: st.info("신청자가 없습니다.")
             else:
-                df = pd.DataFrame(filtered)[['닉네임', '세부직업', '전투력']]
-                df.index = range(1, len(df)+1)
-                st.table(df)
+                st.table(pd.DataFrame(filtered)[['닉네임', '세부직업', '전투력']])
 
 # --- 3. 신청 취소 페이지 ---
 elif menu == "신청 취소":
@@ -142,10 +134,9 @@ elif menu == "신청 취소":
         target_gid = next((u['그룹ID'] for u in db['users'] if u['닉네임'] == c_name and u['비밀번호'] == c_pw), None)
         if target_gid:
             db['users'] = [u for u in db['users'] if u['그룹ID'] != target_gid]
-            for r_name in db['raids']:
-                db['raids'][r_name]['fixed'] = [f for f in db['raids'][r_name]['fixed'] if f.get('그룹ID') != target_gid]
-            save_data(db) # DB 저장
+            save_data(db)
             st.success("취소 완료.")
+            st.rerun()
         else: st.error("정보 불일치.")
 
 # --- 4. 관리자 설정 페이지 ---
@@ -153,157 +144,150 @@ elif menu == "관리자 설정":
     st.header("👑 관리자 페이지")
     if st.text_input("관리자 암호", type="password") == ADMIN_PASSWORD:
         
-        # 1. 시간대 관리
-        st.subheader("⏰ 레이드별 시간대 관리")
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
-            st.markdown("**시간대 추가**")
-            add_type = st.selectbox("레이드 선택", ["루드라", "침식"], key="adm_t")
-            new_time = st.text_input("시간 입력 (예: 토요일 20시)")
-            if st.button("시간대 등록"):
-                db['schedules'].append({"type": add_type, "time": new_time})
-                save_data(db)
-                st.rerun()
-        with col_s2:
-            st.markdown("**시간대 삭제**")
-            if db['schedules']:
-                sch_list = [f"{s['type']} | {s['time']}" for s in db['schedules']]
-                del_target = st.selectbox("삭제할 항목 선택", sch_list)
-                if st.button("선택 항목 삭제"):
-                    d_type, d_time = del_target.split(" | ")
-                    db['schedules'] = [s for s in db['schedules'] if not (s['type'] == d_type and s['time'] == d_time)]
-                    db['users'] = [u for u in db['users'] if not (u['레이드종류'] == d_type and u['시간대'] == d_time)]
-                    save_data(db)
-                    st.warning(f"{del_target} 삭제 완료")
-                    st.rerun()
-        
-        st.markdown("---")
-        # 2. 공격대 구성 설정
-        with st.expander("⚔️ 공격대 구성 정보 입력"):
-            r_type = st.selectbox("대상 레이드", ["루드라", "침식"], key="r_t")
-            r_sch_opts = [s['time'] for s in db['schedules'] if s['type'] == r_type]
-            r_sch = st.selectbox("대상 시간대", r_sch_opts) if r_sch_opts else None
-            r_name = st.text_input("공격대 이름 (예: 1공대)")
-            alloc_cap = st.number_input("매칭할 인원 수", 1, 8, 8)
-            c1, c2, c3, c4 = st.columns(4)
-            t_cnt = c1.number_input("최소 탱커", 0, 8, 2)
-            h_cnt = c2.number_input("최소 호법", 0, 8, 1)
-            c_cnt = c3.number_input("최소 치유", 0, 8, 1)
-            d_cnt = c4.number_input("최소 딜러", 0, 8, 4)
-            if st.button("공대 설정 저장"):
-                if r_name and r_sch:
-                    db['raids'][r_name] = {"type": r_type, "schedule": r_sch, "allocate_count": alloc_cap, "tank": t_cnt, "hodeop": h_cnt, "chiyu": c_cnt, "dealer": d_cnt, "fixed": []}
-                    save_data(db)
-                    st.success(f"{r_name} 저장됨")
+        tab1, tab2, tab3 = st.tabs(["👥 신청자 관리", "⚔️ 시간대/공대 설정", "🎲 전략 매칭 실행"])
 
-        st.markdown("---")
-        # 3. 신청자 관리 및 고정/강제취소
-        st.subheader("👥 신청자 관리")
-        if db['users']:
-            admin_df = pd.DataFrame(db['users'])[['레이드종류', '시간대', '닉네임', '세부직업', '고정', '배정공대']]
-            st.dataframe(admin_df, use_container_width=True)
-            
-            c_f1, c_f2 = st.columns(2)
-            with c_f1:
-                u_opts = [f"{u['닉네임']} ({u['레이드종류']}/{u['시간대']})" for u in db['users'] if not u['고정']]
-                r_opts = [f"{r} ({v['type']}/{v['schedule']})" for r, v in db['raids'].items()]
-                if u_opts and r_opts:
-                    sel_u = st.selectbox("사용자 고정", u_opts)
-                    sel_r = st.selectbox("대상 공대", r_opts)
-                    if st.button("고정 확정"):
-                        u_name = sel_u.split(" (")[0]
-                        r_name = sel_r.split(" (")[0]
-                        for u in db['users']:
-                            if u['닉네임'] == u_name:
-                                if u['레이드종류'] == db['raids'][r_name]['type'] and u['시간대'] == db['raids'][r_name]['schedule']:
-                                    u['고정'] = True
-                                    u['배정공대'] = r_name
-                                    db['raids'][r_name]['fixed'].append(u)
-                                    save_data(db)
-                                    st.rerun()
-                                else: st.error("정보 불일치")
-            with c_f2:
-                all_u = [f"{u['닉네임']} ({u['레이드종류']}/{u['시간대']})" for u in db['users']]
-                del_target = st.selectbox("강제 취소 선택", all_u)
-                if st.button("강제 삭제"):
-                    t_name = del_target.split(" (")[0]
-                    t_gid = next(u['그룹ID'] for u in db['users'] if u['닉네임'] == t_name)
-                    db['users'] = [u for u in db['users'] if u['그룹ID'] != t_gid]
-                    save_data(db)
-                    st.rerun()
-
-        st.markdown("---")
-        # 4. 전략 매칭 및 확정
-        st.subheader("🎲 랜덤 매칭 실행 및 확정")
-        m_type = st.selectbox("매칭 레이드", ["루드라", "침식"], key="m_t")
-        m_sch_opts = [s['time'] for s in db['schedules'] if s['type'] == m_type]
-        m_sch = st.selectbox("매칭 시간대", m_sch_opts, key="m_s") if m_sch_opts else None
-        
-        if st.button("랜덤 매칭 미리보기 실행"):
-            if m_sch:
-                available_users = [u.copy() for u in db['users'] if u['레이드종류'] == m_type and u['시간대'] == m_sch]
-                raids_to_match = {k: v for k, v in db['raids'].items() if v['type'] == m_type and v['schedule'] == m_sch}
+        with tab1:
+            st.subheader("📋 전체 신청자 목록 (동반자 확인 가능)")
+            if db['users']:
+                # 그룹ID 순으로 정렬하여 일행끼리 모여 보이게 함
+                df_admin = pd.DataFrame(db['users']).sort_values(by="그룹ID")
+                # 관리자가 '누구랑' 파티를 원하는지 볼 수 있도록 관계/조건 열 포함
+                display_cols = ['그룹ID', '닉네임', '세부직업', '관계', '조건', '전투력', '레이드종류', '시간대', '고정', '배정공대']
+                st.dataframe(df_admin[display_cols], use_container_width=True)
                 
-                if raids_to_match:
-                    preview = {}
-                    for r_name, config in raids_to_match.items():
-                        raid_list = []
-                        fixed = [u for u in available_users if u['고정'] and u['배정공대'] == r_name]
-                        raid_list.extend(fixed)
-                        available_users = [u for u in available_users if u['닉네임'] not in [f['닉네임'] for f in fixed]]
+                st.markdown("---")
+                col_del1, col_del2 = st.columns(2)
+                with col_del1:
+                    all_u = [f"{u['닉네임']} ({u['레이드종류']}/{u['시간대']})" for u in db['users']]
+                    del_target = st.selectbox("강제 삭제할 사용자", all_u)
+                    if st.button("해당 유저(일행포함) 삭제"):
+                        t_name = del_target.split(" (")[0]
+                        t_gid = next(u['그룹ID'] for u in db['users'] if u['닉네임'] == t_name)
+                        db['users'] = [u for u in db['users'] if u['그룹ID'] != t_gid]
+                        save_data(db)
+                        st.rerun()
+            else:
+                st.info("신청자가 없습니다.")
+
+        with tab2:
+            st.subheader("⏰ 시간대 및 ⚔️ 공격대 이름 관리")
+            c_s1, c_s2 = st.columns(2)
+            with c_s1:
+                st.markdown("**시간대 등록/삭제**")
+                at = st.selectbox("레이드", ["루드라", "침식"], key="at")
+                nt = st.text_input("시간 (예: 토요일 20시)")
+                if st.button("추가"):
+                    db['schedules'].append({"type": at, "time": nt}); save_data(db); st.rerun()
+                
+                if db['schedules']:
+                    slist = [f"{s['type']} | {s['time']}" for s in db['schedules']]
+                    dt = st.selectbox("삭제할 시간대", slist)
+                    if st.button("시간대 삭제"):
+                        dt_type, dt_time = dt.split(" | ")
+                        db['schedules'] = [s for s in db['schedules'] if not (s['type'] == dt_type and s['time'] == dt_time)]
+                        db['users'] = [u for u in db['users'] if not (u['레이드종류'] == dt_type and u['시간대'] == dt_time)]
+                        save_data(db); st.rerun()
+
+            with c_s2:
+                st.markdown("**공격대 등록/삭제**")
+                rt = st.selectbox("레이드", ["루드라", "침식"], key="rt")
+                rs_opts = [s['time'] for s in db['schedules'] if s['type'] == rt]
+                rs = st.selectbox("시간대", rs_opts) if rs_opts else None
+                rn = st.text_input("공대 이름 (예: 1공대)")
+                if st.button("공대 생성"):
+                    if rn and rs:
+                        # 생성 시에는 기본값만 저장
+                        db['raids'][rn] = {"type": rt, "schedule": rs, "allocate_count": 8, "tank": 2, "hodeop": 1, "chiyu": 1, "dealer": 4, "fixed": []}
+                        save_data(db); st.rerun()
+                
+                if db['raids']:
+                    st.markdown("---")
+                    r_to_del = st.selectbox("삭제할 공격대 선택", list(db['raids'].keys()))
+                    if st.button("🔴 선택한 공대 삭제", help="생성된 공격대 설정을 삭제합니다."):
+                        del db['raids'][r_to_del]
+                        save_data(db); st.rerun()
+
+        with tab3:
+            st.subheader("🎲 랜덤 매칭 실행 (설정 수정 후 실행)")
+            mt = st.selectbox("매칭 레이드", ["루드라", "침식"], key="mt")
+            ms_opts = [s['time'] for s in db['schedules'] if s['type'] == mt]
+            ms = st.selectbox("매칭 시간대", ms_opts, key="ms") if ms_opts else None
+            
+            if ms:
+                raids_in_slot = {k: v for k, v in db['raids'].items() if v['type'] == mt and v['schedule'] == ms}
+                
+                if raids_in_slot:
+                    st.info(f"💡 [{mt} | {ms}]에 배정된 공격대들입니다. 매칭 전 인원 설정을 최종 확인하세요.")
+                    # 매칭 직전 공대별 세부 설정 UI
+                    for name, conf in raids_in_slot.items():
+                        with st.expander(f"⚙️ {name} 세부 설정 수정"):
+                            conf['allocate_count'] = st.number_input(f"{name} 배치 인원", 1, 8, conf['allocate_count'], key=f"ac_{name}")
+                            c1, c2, c3, c4 = st.columns(4)
+                            conf['tank'] = c1.number_input("최소 탱커", 0, 8, conf['tank'], key=f"t_{name}")
+                            conf['hodeop'] = c2.number_input("최소 호법", 0, 8, conf['hodeop'], key=f"h_{name}")
+                            conf['chiyu'] = c3.number_input("최소 치유", 0, 8, conf['chiyu'], key=f"c_{name}")
+                            conf['dealer'] = c4.number_input("최소 딜러", 0, 8, conf['dealer'], key=f"d_{name}")
+                    
+                    if st.button("🚀 위 설정으로 랜덤 매칭 미리보기"):
+                        # 매칭 로직 시작
+                        available_users = [u.copy() for u in db['users'] if u['레이드종류'] == mt and u['시간대'] == ms]
+                        preview = {}
                         
-                        roles = {"탱커": config['tank'], "호법성": config['hodeop'], "치유성": config['chiyu'], "딜러": config['dealer']}
-                        for role, count in roles.items():
-                            n = count - sum(1 for x in raid_list if x['분류'] == role)
-                            if n > 0:
-                                cands = [u for u in available_users if u['분류'] == role]
-                                sel = random.sample(cands, min(len(cands), n))
+                        for r_name, config in raids_in_slot.items():
+                            raid_list = []
+                            # 고정 인원 처리
+                            fixed = [u for u in available_users if u['고정'] and u['배정공대'] == r_name]
+                            raid_list.extend(fixed)
+                            available_users = [u for u in available_users if u['닉네임'] not in [f['닉네임'] for f in fixed]]
+                            
+                            # 역할별 매칭
+                            roles = {"탱커": config['tank'], "호법성": config['hodeop'], "치유성": config['chiyu'], "딜러": config['dealer']}
+                            for role, count in roles.items():
+                                n = count - sum(1 for x in raid_list if x['분류'] == role)
+                                if n > 0:
+                                    cands = [u for u in available_users if u['분류'] == role]
+                                    sel = random.sample(cands, min(len(cands), n))
+                                    raid_list.extend(sel)
+                                    available_users = [u for u in available_users if u['닉네임'] not in [s['닉네임'] for s in sel]]
+                            
+                            # 나머지 자리 채움
+                            rem = config['allocate_count'] - len(raid_list)
+                            if rem > 0:
+                                sel = random.sample(available_users, min(len(available_users), rem))
                                 raid_list.extend(sel)
                                 available_users = [u for u in available_users if u['닉네임'] not in [s['닉네임'] for s in sel]]
+                            
+                            while len(raid_list) < 8:
+                                raid_list.append({"닉네임": "공석(공팟)", "세부직업": "-", "분류": "공석", "전투력": 0})
+                            
+                            for idx, member in enumerate(raid_list):
+                                member['파티'] = "1파티" if idx < 4 else "2파티"
+                            preview[r_name] = raid_list
                         
-                        rem = config['allocate_count'] - len(raid_list)
-                        if rem > 0:
-                            sel = random.sample(available_users, min(len(available_users), rem))
-                            raid_list.extend(sel)
-                            available_users = [u for u in available_users if u['닉네임'] not in [s['닉네임'] for s in sel]]
-                        
-                        while len(raid_list) < 8:
-                            raid_list.append({"닉네임": "공석(공팟)", "세부직업": "-", "분류": "공석", "전투력": 0})
-                        
-                        for idx, member in enumerate(raid_list):
-                            member['파티'] = "1파티" if idx < 4 else "2파티"
-                        
-                        preview[r_name] = raid_list
+                        st.session_state.preview_result = {"key": f"{mt}_{ms}", "data": preview}
+
+                if st.session_state.preview_result:
+                    st.markdown("---")
+                    st.subheader("👀 매칭 결과 미리보기")
+                    for r_name, members in st.session_state.preview_result['data'].items():
+                        st.write(f"**{r_name}**")
+                        st.table(pd.DataFrame(members)[['파티', '닉네임', '세부직업', '전투력']])
                     
-                    # JSON에서 tuple 키를 사용할 수 없으므로 문자열 조합으로 키 변경
-                    preview_key = f"{m_type}_{m_sch}"
-                    st.session_state.preview_result = {"key": preview_key, "data": preview}
-                else: st.warning("공격대 설정이 없습니다.")
+                    if st.button("✅ 최종 매칭 결과 확정 및 공개"):
+                        key = st.session_state.preview_result['key']
+                        db['confirmed_matches'][key] = st.session_state.preview_result['data']
+                        save_data(db)
+                        st.success("매칭 결과가 확정되었습니다!")
+                        st.session_state.preview_result = None
 
-        if st.session_state.preview_result:
-            st.markdown("### 👀 매칭 미리보기")
-            for r_name, members in st.session_state.preview_result['data'].items():
-                st.write(f"**{r_name}**")
-                st.table(pd.DataFrame(members)[['파티', '닉네임', '세부직업', '전투력']])
-            
-            if st.button("최종 매칭 결과 확정"):
-                key = st.session_state.preview_result['key']
-                db['confirmed_matches'][key] = st.session_state.preview_result['data']
-                save_data(db) # 확정 결과 DB 저장
-                
-                # 시각적 확인을 위해 표시
-                disp_type, disp_sch = key.split("_")
-                st.success(f"[{disp_type} | {disp_sch}] 매칭 결과가 확정되어 공개되었습니다!")
-                st.session_state.preview_result = None
-
-# --- 5. 매칭 결과 페이지 (사용자용) ---
+# --- 5. 매칭 결과 페이지 ---
 elif menu == "매칭 결과":
     st.header("🏆 최종 매칭 결과 확인")
     c1, c2 = st.columns(2)
-    with c1: res_type = st.selectbox("레이드 선택", ["루드라", "침식"], key="res_t")
+    with c1: res_type = st.selectbox("레이드 선택", ["루드라", "침식"])
     with c2: 
         res_sch_opts = [s['time'] for s in db['schedules'] if s['type'] == res_type]
-        res_sch = st.selectbox("시간대 선택", res_sch_opts, key="res_s") if res_sch_opts else None
+        res_sch = st.selectbox("시간대 선택", res_sch_opts) if res_sch_opts else None
         
     if res_sch:
         res_key = f"{res_type}_{res_sch}"
@@ -311,6 +295,5 @@ elif menu == "매칭 결과":
         if match_data:
             for r_name, members in match_data.items():
                 st.markdown(f"### 📍 {r_name}")
-                df = pd.DataFrame(members)[['파티', '닉네임', '세부직업', '전투력']]
-                st.table(df)
+                st.table(pd.DataFrame(members)[['파티', '닉네임', '세부직업', '전투력']])
         else: st.warning("아직 확정된 매칭 결과가 없습니다.")
