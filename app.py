@@ -1,16 +1,19 @@
 import streamlit as st
 import pandas as pd
 import random
+import uuid # 그룹 생성을 위한 고유 ID 라이브러리
 
 st.set_page_config(page_title="레이드 매칭 시스템", layout="wide")
 
-# 세션 상태 초기화 (데이터 저장용)
+# 세션 상태 초기화 (데이터 저장 및 동적 UI용)
 if 'users' not in st.session_state:
     st.session_state.users = []
 if 'raids' not in st.session_state:
     st.session_state.raids = {}
+if 'comp_count' not in st.session_state:
+    st.session_state.comp_count = 0
 
-# 기본 관리자 비밀번호 설정 (원하는 대로 변경하세요)
+# 기본 관리자 비밀번호 설정
 ADMIN_PASSWORD = "admin" 
 
 st.title("🎮 레이드 랜덤 매칭 및 관리 시스템")
@@ -20,62 +23,107 @@ menu = st.sidebar.selectbox("메뉴", ["사용자 신청", "신청 취소", "관
 # --- 1. 사용자 신청 페이지 ---
 if menu == "사용자 신청":
     st.header("📝 레이드 참가 신청")
+    st.info("💡 동반자가 있다면 아래 버튼을 먼저 눌러 인원을 추가한 뒤 폼을 작성해 주세요.")
+    
+    # 동반자 수 조절 버튼 (폼 외부에 배치하여 즉각 반응하도록 함)
+    col1, col2, col3 = st.columns([1, 1, 3])
+    with col1:
+        if st.button("➕ 동반자 인원 추가"):
+            st.session_state.comp_count += 1
+    with col2:
+        if st.button("➖ 동반자 인원 빼기") and st.session_state.comp_count > 0:
+            st.session_state.comp_count -= 1
+
     with st.form("apply_form"):
-        col1, col2 = st.columns(2)
-        with col1:
+        st.subheader("👤 본인 정보")
+        c1, c2 = st.columns(2)
+        with c1:
             name = st.text_input("닉네임")
             job = st.selectbox("직업", ["딜러", "치유성", "탱커"])
-            user_pw = st.text_input("취소용 비밀번호 (숫자 4자리 권장)", type="password") # 취소용 비밀번호 추가
-        with col2:
+            user_pw = st.text_input("취소용 비밀번호 (숫자 4자리 권장)", type="password")
+        with c2:
             power = st.number_input("전투력", min_value=0, step=100)
-            companion = st.text_input("동반자 닉네임 (없으면 비움)")
         
-        comp_type = st.radio("동반자 조건", ["없음", "같은 파티 희망", "같은 공격대 희망"])
-        
+        # 동반자 정보 입력란 동적 생성
+        comp_data = []
+        if st.session_state.comp_count > 0:
+            st.markdown("---")
+            st.subheader(f"👥 동반자 정보 (총 {st.session_state.comp_count}명)")
+            
+            for i in range(st.session_state.comp_count):
+                st.markdown(f"**동반자 {i+1}**")
+                cc1, cc2, cc3 = st.columns(3)
+                with cc1:
+                    c_name = st.text_input("닉네임", key=f"c_name_{i}")
+                    c_job = st.selectbox("직업", ["딜러", "치유성", "탱커"], key=f"c_job_{i}")
+                with cc2:
+                    c_power = st.number_input("전투력", min_value=0, step=100, key=f"c_pow_{i}")
+                with cc3:
+                    c_type = st.radio("본인과의 조건", ["같은 파티 희망", "같은 공격대 희망"], key=f"c_type_{i}")
+                
+                comp_data.append({"name": c_name, "job": c_job, "power": c_power, "type": c_type})
+
         if st.form_submit_button("신청하기"):
-            # 닉네임 중복 방지 로직 (선택 사항)
             if any(u['닉네임'] == name for u in st.session_state.users):
-                st.error("이미 신청된 닉네임입니다. 다른 닉네임을 사용하거나 기존 신청을 취소해 주세요.")
+                st.error("이미 신청된 닉네임입니다.")
             elif not name or not user_pw:
-                st.error("닉네임과 취소용 비밀번호는 필수 입력 사항입니다.")
+                st.error("본인의 닉네임과 취소용 비밀번호는 필수 입력 사항입니다.")
             else:
+                # 일행을 하나로 묶어줄 고유 그룹 ID 생성
+                group_id = str(uuid.uuid4())[:8]
+                
+                # 본인 데이터 저장
                 st.session_state.users.append({
                     "닉네임": name, "직업": job, "전투력": power, 
-                    "비밀번호": user_pw, # 비밀번호 저장
-                    "동반자": companion, "조건": comp_type, "고정": False
+                    "비밀번호": user_pw, "고정": False,
+                    "그룹ID": group_id, "관계": "본인(대표)", "조건": "없음"
                 })
-                st.success(f"{name}님 신청 완료!")
+                
+                # 동반자 데이터 저장
+                added_companions = 0
+                for c in comp_data:
+                    if c['name']: # 이름이 입력된 동반자만 저장
+                        st.session_state.users.append({
+                            "닉네임": c['name'], "직업": c['job'], "전투력": c['power'], 
+                            "비밀번호": user_pw, "고정": False, # 비밀번호는 대표자 것 공유
+                            "그룹ID": group_id, "관계": f"{name}의 동반자", "조건": c['type']
+                        })
+                        added_companions += 1
+                        
+                st.success(f"{name}님 그룹 (총 {1 + added_companions}명) 신청 완료!")
 
-# --- 2. 신청 취소 페이지 (새로 추가됨) ---
+# --- 2. 신청 취소 페이지 (그룹 취소 로직으로 변경) ---
 elif menu == "신청 취소":
     st.header("🗑️ 참가 신청 취소")
-    st.info("신청 시 입력했던 닉네임과 취소용 비밀번호를 입력해 주세요.")
+    st.info("신청 시 입력했던 본인(대표자)의 닉네임과 취소용 비밀번호를 입력해 주세요. (일행 전체가 함께 취소됩니다)")
     
     cancel_name = st.text_input("취소할 닉네임")
     cancel_pw = st.text_input("취소용 비밀번호", type="password")
     
     if st.button("신청 내역 삭제"):
-        found = False
-        for i, u in enumerate(st.session_state.users):
+        target_group_id = None
+        # 입력한 정보로 그룹 ID 찾기
+        for u in st.session_state.users:
             if u['닉네임'] == cancel_name and u['비밀번호'] == cancel_pw:
-                del st.session_state.users[i]
-                found = True
-                
-                # 고정 인원 목록에서도 삭제
-                for raid in st.session_state.raids.values():
-                    raid['fixed'] = [f for f in raid['fixed'] if f['닉네임'] != cancel_name]
-                    
-                st.success(f"{cancel_name}님의 신청 내역이 성공적으로 취소되었습니다.")
+                target_group_id = u['그룹ID']
                 break
                 
-        if not found:
+        if target_group_id:
+            # 해당 그룹 ID를 가진 모든 유저(본인+동반자) 삭제
+            st.session_state.users = [u for u in st.session_state.users if u['그룹ID'] != target_group_id]
+            
+            # 고정 인원 목록에서도 해당 그룹원들 삭제
+            for raid in st.session_state.raids.values():
+                raid['fixed'] = [f for f in raid['fixed'] if f.get('그룹ID') != target_group_id]
+                
+            st.success(f"{cancel_name}님 그룹의 신청 내역이 성공적으로 취소되었습니다.")
+        else:
             st.error("닉네임 또는 비밀번호가 일치하지 않거나, 신청 내역이 없습니다.")
 
-# --- 3. 관리자 설정 페이지 (보안 추가됨) ---
+# --- 3. 관리자 설정 페이지 ---
 elif menu == "관리자 설정":
     st.header("👑 관리자 설정")
     
-    # 관리자 비밀번호 검증
     input_pw = st.text_input("관리자 비밀번호를 입력하세요", type="password")
     
     if input_pw == ADMIN_PASSWORD:
@@ -89,7 +137,6 @@ elif menu == "관리자 설정":
             raid_name = st.text_input("공격대 이름 (예: 1공대, A팀)")
             raid_cap = st.number_input("총 인원수 (4의 배수 권장)", min_value=4, step=4, value=8)
             if st.button("공격대 추가/수정"):
-                # 기존 고정 인원 유지하면서 설정 업데이트
                 current_fixed = st.session_state.raids.get(raid_name, {}).get('fixed', [])
                 st.session_state.raids[raid_name] = {"capacity": raid_cap, "fixed": current_fixed}
                 st.info(f"{raid_name} 설정 완료 (정원: {raid_cap}명)")
@@ -119,7 +166,6 @@ elif menu == "매칭 결과":
         st.warning("관리자 설정에서 공격대를 먼저 생성해 주세요.")
     else:
         if st.button("랜덤 매칭 시작"):
-            # 매칭 로직
             all_participants = st.session_state.users.copy()
             result_display = {}
 
@@ -127,34 +173,21 @@ elif menu == "매칭 결과":
                 cap = config['capacity']
                 current_raid_members = config['fixed'].copy()
                 
-                # 남은 인원 중 고정되지 않은 사람 필터링
                 available = [u for u in all_participants if not u['고정']]
                 needed = cap - len(current_raid_members)
                 
-                # 랜덤 배분
                 sampled = random.sample(available, min(len(available), needed))
                 current_raid_members.extend(sampled)
                 
-                # 배분된 인원은 전체 리스트에서 '고정' 처리하여 중복 방지
                 for s in sampled:
                     for u in all_participants:
                         if u['닉네임'] == s['닉네임']:
                             u['고정'] = True 
                 
-                # 부족하면 공석 채우기
                 while len(current_raid_members) < cap:
-                    current_raid_members.append({"닉네임": "공석(공팟)", "직업": "미정", "전투력": 0})
+                    current_raid_members.append({"닉네임": "공석(공팟)", "직업": "-", "전투력": 0})
                 
                 result_display[r_name] = current_raid_members
                 
-            # 결과 화면 출력
             for r_name, members in result_display.items():
-                st.subheader(f"📍 {r_name}")
-                # 비밀번호 등 불필요한 정보는 표에서 숨기기
-                display_df = pd.DataFrame(members)
-                if '비밀번호' in display_df.columns:
-                    display_df = display_df.drop(columns=['비밀번호', '고정'])
-                
-                st.table(display_df)
-                avg_p = display_df['전투력'].mean()
-                st.write(f"**평균 전투력: {avg_p:,.0f}**")
+                st.subheader(f"📍 {
