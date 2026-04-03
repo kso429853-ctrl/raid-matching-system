@@ -18,33 +18,27 @@ if 'users' not in st.session_state: st.session_state.users = []
 if 'raids' not in st.session_state: st.session_state.raids = {}
 if 'comp_count' not in st.session_state: st.session_state.comp_count = 0
 if 'schedules' not in st.session_state: st.session_state.schedules = []
-# 신청 성공 화면 전환용 상태 변수 추가
 if 'apply_success' not in st.session_state: st.session_state.apply_success = False
 
 ADMIN_PASSWORD = "admin" 
 
 st.title("🎮 CONTROL 레이드 신청")
 
-menu = st.sidebar.selectbox("메뉴", ["사용자 신청", "신청 취소", "관리자 설정", "매칭 결과"])
+# 메뉴에 '현재 신청 현황' 추가
+menu = st.sidebar.selectbox("메뉴", ["사용자 신청", "현재 신청 현황", "신청 취소", "관리자 설정", "매칭 결과"])
 
 # --- 1. 사용자 신청 페이지 ---
 if menu == "사용자 신청":
-    
-    # 📌 신청 완료 화면 (성공했을 때만 보임)
     if st.session_state.apply_success:
         st.success("🎉 성공적으로 신청이 완료되었습니다!")
-        st.balloons() # 축하 효과 (선택 사항)
-        
+        st.balloons() 
         if st.button("확인"):
-            # 확인 버튼을 누르면 상태 초기화 후 화면 새로고침
             st.session_state.apply_success = False
             st.session_state.comp_count = 0
             st.rerun()
             
-    # 📌 기본 신청 폼 화면 (평상시 보임)
     else:
         st.header("📝 레이드 참가 신청")
-        
         if not st.session_state.schedules:
             st.error("🚫 금주 고정 시간대가 없습니다. 관리자가 시간대를 등록할 때까지 신청이 불가능합니다.")
         else:
@@ -100,10 +94,27 @@ if menu == "사용자 신청":
                                     "전투력": c['power'], "레이드종류": req_type, "시간대": req_schedule,
                                     "비밀번호": u_pw, "그룹ID": gid, "고정": False, "배정공대": None
                                 })
-                        
-                        # 신청 성공 시 상태를 변경하고 화면을 즉시 새로고침
                         st.session_state.apply_success = True
                         st.rerun()
+
+# --- 새 기능: 현재 신청 현황 페이지 ---
+elif menu == "현재 신청 현황":
+    st.header("📊 현재 신청 현황")
+    if not st.session_state.users:
+        st.info("현재 접수된 신청이 없습니다.")
+    else:
+        df = pd.DataFrame(st.session_state.users)
+        
+        st.subheader("📌 레이드 및 시간대별 신청 요약")
+        # 시간대/레이드별 직업군 분포를 보기 쉽게 피벗 테이블로 정리
+        summary_df = df.groupby(['레이드종류', '시간대', '분류']).size().unstack(fill_value=0)
+        st.dataframe(summary_df, use_container_width=True)
+        
+        st.markdown("---")
+        st.subheader("📋 세부 신청자 명단")
+        # 민감한 정보 제외 후 출력
+        display_df = df[['레이드종류', '시간대', '분류', '세부직업', '닉네임', '전투력', '고정']]
+        st.dataframe(display_df, use_container_width=True)
 
 # --- 2. 신청 취소 페이지 ---
 elif menu == "신청 취소":
@@ -125,16 +136,6 @@ elif menu == "관리자 설정":
     st.header("👑 관리자 페이지")
     if st.text_input("관리자 암호", type="password") == ADMIN_PASSWORD:
         
-        st.subheader("📋 전체 신청자 목록")
-        if st.session_state.users:
-            df_users = pd.DataFrame(st.session_state.users)
-            display_df = df_users[['닉네임', '세부직업', '분류', '전투력', '레이드종류', '시간대', '고정', '배정공대']]
-            st.dataframe(display_df, use_container_width=True)
-        else:
-            st.info("아직 신청자가 없습니다.")
-            
-        st.markdown("---")
-        
         st.subheader("⏰ 요일 및 시간대 관리")
         col_s1, col_s2 = st.columns(2)
         with col_s1:
@@ -143,13 +144,41 @@ elif menu == "관리자 설정":
                 if new_sch not in st.session_state.schedules:
                     st.session_state.schedules.append(new_sch)
                     st.success(f"'{new_sch}' 추가 완료")
+                    st.rerun()
         with col_s2:
             if st.session_state.schedules:
                 del_sch = st.selectbox("삭제할 시간대 선택", st.session_state.schedules)
                 if st.button("시간대 삭제"):
+                    # [핵심] 시간대 삭제 시 해당 시간대의 신청자도 모두 삭제
                     st.session_state.schedules.remove(del_sch)
-                    st.warning(f"'{del_sch}' 삭제 완료")
+                    st.session_state.users = [u for u in st.session_state.users if u['시간대'] != del_sch]
+                    
+                    # 고정 인원 목록에서도 찌꺼기 삭제
+                    for r_name in st.session_state.raids:
+                        st.session_state.raids[r_name]['fixed'] = [f for f in st.session_state.raids[r_name]['fixed'] if f.get('시간대') != del_sch]
+                        
+                    st.warning(f"'{del_sch}' 삭제 및 해당 시간대 신청자 데이터 일괄 정리 완료!")
+                    st.rerun()
         
+        st.markdown("---")
+        
+        # [신규 추가] 관리자 직권 취소 (강제 삭제)
+        st.subheader("🗑️ 관리자 직권 유저 취소")
+        if st.session_state.users:
+            del_user = st.selectbox("취소할 신청자 선택 (해당 신청자가 속한 일행 전체가 취소됩니다)", [f"{u['닉네임']} ({u['레이드종류']}/{u['시간대']})" for u in st.session_state.users])
+            if st.button("해당 유저(그룹) 강제 취소"):
+                target_name = del_user.split(" (")[0]
+                target_gid = next((u['그룹ID'] for u in st.session_state.users if u['닉네임'] == target_name), None)
+                
+                if target_gid:
+                    st.session_state.users = [u for u in st.session_state.users if u['그룹ID'] != target_gid]
+                    for r_name in st.session_state.raids:
+                        st.session_state.raids[r_name]['fixed'] = [f for f in st.session_state.raids[r_name]['fixed'] if f.get('그룹ID') != target_gid]
+                    st.success(f"[{target_name}]님이 속한 그룹의 신청이 강제 취소되었습니다.")
+                    st.rerun()
+        else:
+            st.info("현재 취소할 신청자가 없습니다.")
+            
         st.markdown("---")
         
         st.subheader("⚔️ 공격대 구성 설정 (총 8명 고정)")
@@ -235,7 +264,6 @@ elif menu == "매칭 결과":
             for r_name, config in st.session_state.raids.items():
                 raid_list = []
                 
-                # 1. 고정 인원 배치
                 fixed_in_this_raid = [u for u in available_users if u['고정'] and u['배정공대'] == r_name]
                 raid_list.extend(fixed_in_this_raid)
                 for f in fixed_in_this_raid:
@@ -246,7 +274,6 @@ elif menu == "매칭 결과":
                                     and u['레이드종류'] == config['type'] 
                                     and u['시간대'] == config['schedule']]
 
-                # 2. 필수 역할군 충족
                 roles_needed = {
                     "탱커": config['tank'] - sum(1 for x in raid_list if x['분류'] == "탱커"),
                     "호법성": config['hodeop'] - sum(1 for x in raid_list if x['분류'] == "호법성"),
@@ -266,7 +293,6 @@ elif menu == "매칭 결과":
                         else:
                             break 
 
-                # 3. 설정한 '배치할 신청자 수(allocate_count)'까지만 시스템 인원으로 남은 자리 채우기
                 remaining_slots = config['allocate_count'] - len(raid_list)
                 while remaining_slots > 0 and valid_candidates:
                     chosen = pick_smart_user(valid_candidates, raid_list)
@@ -275,7 +301,6 @@ elif menu == "매칭 결과":
                     available_users = [u for u in available_users if u['닉네임'] != chosen['닉네임']]
                     remaining_slots -= 1
 
-                # 4. 무조건 공대 전체 인원이 8명이 되도록 남은 자리를 '공석(공팟)'으로 고정 채우기
                 while len(raid_list) < 8:
                     raid_list.append({"닉네임": "공석(공팟)", "세부직업": "-", "분류": "공석", "전투력": 0})
 
