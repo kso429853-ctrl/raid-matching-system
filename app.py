@@ -3,7 +3,7 @@ import pandas as pd
 import random
 import uuid
 
-st.set_page_config(page_title="레이드 매칭 시스템 v5", layout="wide")
+st.set_page_config(page_title="CONTROL 레이드 신청", layout="wide")
 
 # --- 직업 데이터 정의 ---
 JOB_DETAILS = {
@@ -18,73 +18,92 @@ if 'users' not in st.session_state: st.session_state.users = []
 if 'raids' not in st.session_state: st.session_state.raids = {}
 if 'comp_count' not in st.session_state: st.session_state.comp_count = 0
 if 'schedules' not in st.session_state: st.session_state.schedules = []
+# 신청 성공 화면 전환용 상태 변수 추가
+if 'apply_success' not in st.session_state: st.session_state.apply_success = False
 
 ADMIN_PASSWORD = "admin" 
 
-st.title("🎮 레이드 전략 매칭 시스템 (공팟 자동 채움)")
+st.title("🎮 CONTROL 레이드 신청")
 
 menu = st.sidebar.selectbox("메뉴", ["사용자 신청", "신청 취소", "관리자 설정", "매칭 결과"])
 
 # --- 1. 사용자 신청 페이지 ---
 if menu == "사용자 신청":
-    st.header("📝 레이드 참가 신청")
     
-    if not st.session_state.schedules:
-        st.error("🚫 금주 고정 시간대가 없습니다. 관리자가 시간대를 등록할 때까지 신청이 불가능합니다.")
-    else:
-        st.info("💡 일행이 있다면 ➕ 버튼을 눌러 인원을 추가하세요. 일행은 모두 같은 레이드와 시간대로 신청됩니다.")
-        col1, col2, col3 = st.columns([1, 1, 3])
-        with col1:
-            if st.button("➕ 동반자 추가"): st.session_state.comp_count += 1
-        with col2:
-            if st.button("➖ 동반자 제거") and st.session_state.comp_count > 0: st.session_state.comp_count -= 1
-
-        with st.form("apply_form"):
-            st.subheader("🎯 레이드 및 시간대 선택")
-            r1, r2 = st.columns(2)
-            with r1: req_type = st.selectbox("레이드 종류", ["루드라", "침식"])
-            with r2: req_schedule = st.selectbox("희망 요일/시간대", st.session_state.schedules)
-
-            st.markdown("---")
-            st.subheader("👤 본인 정보")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                name = st.text_input("닉네임")
-                u_pw = st.text_input("취소용 비밀번호", type="password")
-            with c2: job = st.selectbox("직업", list(JOB_DETAILS.keys()))
-            with c3: power = st.number_input("전투력", min_value=0, step=100)
+    # 📌 신청 완료 화면 (성공했을 때만 보임)
+    if st.session_state.apply_success:
+        st.success("🎉 성공적으로 신청이 완료되었습니다!")
+        st.balloons() # 축하 효과 (선택 사항)
+        
+        if st.button("확인"):
+            # 확인 버튼을 누르면 상태 초기화 후 화면 새로고침
+            st.session_state.apply_success = False
+            st.session_state.comp_count = 0
+            st.rerun()
             
-            comp_data = []
-            for i in range(st.session_state.comp_count):
-                st.markdown(f"---")
-                st.markdown(f"**👥 동반자 {i+1}**")
-                cc1, cc2, cc3, cc4 = st.columns(4)
-                with cc1: c_name = st.text_input("닉네임", key=f"cn_{i}")
-                with cc2: c_job = st.selectbox("직업", list(JOB_DETAILS.keys()), key=f"cj_{i}")
-                with cc3: c_power = st.number_input("전투력", min_value=0, step=100, key=f"cp_{i}")
-                with cc4: c_type = st.radio("조건", ["같은 파티 희망", "같은 공격대 희망"], key=f"ct_{i}")
-                comp_data.append({"name": c_name, "job": c_job, "power": c_power, "type": c_type})
+    # 📌 기본 신청 폼 화면 (평상시 보임)
+    else:
+        st.header("📝 레이드 참가 신청")
+        
+        if not st.session_state.schedules:
+            st.error("🚫 금주 고정 시간대가 없습니다. 관리자가 시간대를 등록할 때까지 신청이 불가능합니다.")
+        else:
+            st.info("💡 일행이 있다면 ➕ 버튼을 눌러 인원을 추가하세요. 일행은 모두 같은 레이드와 시간대로 신청됩니다.")
+            col1, col2, col3 = st.columns([1, 1, 3])
+            with col1:
+                if st.button("➕ 동반자 추가"): st.session_state.comp_count += 1
+            with col2:
+                if st.button("➖ 동반자 제거") and st.session_state.comp_count > 0: st.session_state.comp_count -= 1
 
-            if st.form_submit_button("신청하기"):
-                if any(u['닉네임'] == name for u in st.session_state.users):
-                    st.error("이미 신청된 닉네임입니다.")
-                elif not name or not u_pw:
-                    st.error("닉네임과 비밀번호는 필수입니다.")
-                else:
-                    gid = str(uuid.uuid4())[:8]
-                    st.session_state.users.append({
-                        "닉네임": name, "세부직업": job, "분류": JOB_DETAILS[job], 
-                        "전투력": power, "레이드종류": req_type, "시간대": req_schedule,
-                        "비밀번호": u_pw, "그룹ID": gid, "고정": False, "배정공대": None
-                    })
-                    for c in comp_data:
-                        if c['name']:
-                            st.session_state.users.append({
-                                "닉네임": c['name'], "세부직업": c['job'], "분류": JOB_DETAILS[c['job']], 
-                                "전투력": c['power'], "레이드종류": req_type, "시간대": req_schedule,
-                                "비밀번호": u_pw, "그룹ID": gid, "고정": False, "배정공대": None
-                            })
-                    st.success(f"[{req_type} / {req_schedule}] 신청 완료!")
+            with st.form("apply_form"):
+                st.subheader("🎯 레이드 및 시간대 선택")
+                r1, r2 = st.columns(2)
+                with r1: req_type = st.selectbox("레이드 종류", ["루드라", "침식"])
+                with r2: req_schedule = st.selectbox("희망 요일/시간대", st.session_state.schedules)
+
+                st.markdown("---")
+                st.subheader("👤 본인 정보")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    name = st.text_input("닉네임")
+                    u_pw = st.text_input("취소용 비밀번호", type="password")
+                with c2: job = st.selectbox("직업", list(JOB_DETAILS.keys()))
+                with c3: power = st.number_input("전투력", min_value=0, step=100)
+                
+                comp_data = []
+                for i in range(st.session_state.comp_count):
+                    st.markdown(f"---")
+                    st.markdown(f"**👥 동반자 {i+1}**")
+                    cc1, cc2, cc3, cc4 = st.columns(4)
+                    with cc1: c_name = st.text_input("닉네임", key=f"cn_{i}")
+                    with cc2: c_job = st.selectbox("직업", list(JOB_DETAILS.keys()), key=f"cj_{i}")
+                    with cc3: c_power = st.number_input("전투력", min_value=0, step=100, key=f"cp_{i}")
+                    with cc4: c_type = st.radio("조건", ["같은 파티 희망", "같은 공격대 희망"], key=f"ct_{i}")
+                    comp_data.append({"name": c_name, "job": c_job, "power": c_power, "type": c_type})
+
+                if st.form_submit_button("신청하기"):
+                    if any(u['닉네임'] == name for u in st.session_state.users):
+                        st.error("이미 신청된 닉네임입니다.")
+                    elif not name or not u_pw:
+                        st.error("닉네임과 비밀번호는 필수입니다.")
+                    else:
+                        gid = str(uuid.uuid4())[:8]
+                        st.session_state.users.append({
+                            "닉네임": name, "세부직업": job, "분류": JOB_DETAILS[job], 
+                            "전투력": power, "레이드종류": req_type, "시간대": req_schedule,
+                            "비밀번호": u_pw, "그룹ID": gid, "고정": False, "배정공대": None
+                        })
+                        for c in comp_data:
+                            if c['name']:
+                                st.session_state.users.append({
+                                    "닉네임": c['name'], "세부직업": c['job'], "분류": JOB_DETAILS[c['job']], 
+                                    "전투력": c['power'], "레이드종류": req_type, "시간대": req_schedule,
+                                    "비밀번호": u_pw, "그룹ID": gid, "고정": False, "배정공대": None
+                                })
+                        
+                        # 신청 성공 시 상태를 변경하고 화면을 즉시 새로고침
+                        st.session_state.apply_success = True
+                        st.rerun()
 
 # --- 2. 신청 취소 페이지 ---
 elif menu == "신청 취소":
