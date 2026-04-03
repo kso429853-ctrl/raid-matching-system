@@ -14,7 +14,7 @@ if 'comp_count' not in st.session_state:
     st.session_state.comp_count = 0
 
 # 기본 관리자 비밀번호 설정
-ADMIN_PASSWORD = "admin" 
+ADMIN_PASSWORD = "1234" 
 
 st.title("🎮 레이드 랜덤 매칭 및 관리 시스템")
 
@@ -190,4 +190,16 @@ elif menu == "매칭 결과":
                 result_display[r_name] = current_raid_members
                 
             for r_name, members in result_display.items():
-                st.subheader(f"📍 {
+                st.subheader(f"📍 {r_name}")
+                display_df = pd.DataFrame(members)
+                
+                # 표에서 불필요하거나 민감한 데이터 숨기기
+                cols_to_drop = ['비밀번호', '고정', '그룹ID']
+                for col in cols_to_drop:
+                    if col in display_df.columns:
+                        display_df = display_df.drop(columns=[col])
+                
+                st.table(display_df)
+                if not display_df.empty and '전투력' in display_df.columns:
+                    avg_p = display_df['전투력'].mean()
+                    st.write(f"**평균 전투력: {avg_p:,.0f}**")
