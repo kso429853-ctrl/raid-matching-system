@@ -149,11 +149,13 @@ elif menu == "관리자 설정":
         with tab1:
             st.subheader("📋 전체 신청자 목록 (동반자 확인 가능)")
             if db['users']:
-                # 그룹ID 순으로 정렬하여 일행끼리 모여 보이게 함
                 df_admin = pd.DataFrame(db['users']).sort_values(by="그룹ID")
-                # 관리자가 '누구랑' 파티를 원하는지 볼 수 있도록 관계/조건 열 포함
-                display_cols = ['그룹ID', '닉네임', '세부직업', '관계', '조건', '전투력', '레이드종류', '시간대', '고정', '배정공대']
-                st.dataframe(df_admin[display_cols], use_container_width=True)
+                
+                # 💡 과거 데이터 충돌 방지: 데이터프레임에 존재하는 열만 선택하도록 안전망 추가
+                desired_cols = ['그룹ID', '닉네임', '세부직업', '관계', '조건', '전투력', '레이드종류', '시간대', '고정', '배정공대']
+                valid_cols = [col for col in desired_cols if col in df_admin.columns]
+                
+                st.dataframe(df_admin[valid_cols], use_container_width=True)
                 
                 st.markdown("---")
                 col_del1, col_del2 = st.columns(2)
@@ -196,14 +198,13 @@ elif menu == "관리자 설정":
                 rn = st.text_input("공대 이름 (예: 1공대)")
                 if st.button("공대 생성"):
                     if rn and rs:
-                        # 생성 시에는 기본값만 저장
                         db['raids'][rn] = {"type": rt, "schedule": rs, "allocate_count": 8, "tank": 2, "hodeop": 1, "chiyu": 1, "dealer": 4, "fixed": []}
                         save_data(db); st.rerun()
                 
                 if db['raids']:
                     st.markdown("---")
                     r_to_del = st.selectbox("삭제할 공격대 선택", list(db['raids'].keys()))
-                    if st.button("🔴 선택한 공대 삭제", help="생성된 공격대 설정을 삭제합니다."):
+                    if st.button("🔴 선택한 공대 삭제"):
                         del db['raids'][r_to_del]
                         save_data(db); st.rerun()
 
@@ -218,7 +219,6 @@ elif menu == "관리자 설정":
                 
                 if raids_in_slot:
                     st.info(f"💡 [{mt} | {ms}]에 배정된 공격대들입니다. 매칭 전 인원 설정을 최종 확인하세요.")
-                    # 매칭 직전 공대별 세부 설정 UI
                     for name, conf in raids_in_slot.items():
                         with st.expander(f"⚙️ {name} 세부 설정 수정"):
                             conf['allocate_count'] = st.number_input(f"{name} 배치 인원", 1, 8, conf['allocate_count'], key=f"ac_{name}")
@@ -229,18 +229,15 @@ elif menu == "관리자 설정":
                             conf['dealer'] = c4.number_input("최소 딜러", 0, 8, conf['dealer'], key=f"d_{name}")
                     
                     if st.button("🚀 위 설정으로 랜덤 매칭 미리보기"):
-                        # 매칭 로직 시작
                         available_users = [u.copy() for u in db['users'] if u['레이드종류'] == mt and u['시간대'] == ms]
                         preview = {}
                         
                         for r_name, config in raids_in_slot.items():
                             raid_list = []
-                            # 고정 인원 처리
                             fixed = [u for u in available_users if u['고정'] and u['배정공대'] == r_name]
                             raid_list.extend(fixed)
                             available_users = [u for u in available_users if u['닉네임'] not in [f['닉네임'] for f in fixed]]
                             
-                            # 역할별 매칭
                             roles = {"탱커": config['tank'], "호법성": config['hodeop'], "치유성": config['chiyu'], "딜러": config['dealer']}
                             for role, count in roles.items():
                                 n = count - sum(1 for x in raid_list if x['분류'] == role)
@@ -250,7 +247,6 @@ elif menu == "관리자 설정":
                                     raid_list.extend(sel)
                                     available_users = [u for u in available_users if u['닉네임'] not in [s['닉네임'] for s in sel]]
                             
-                            # 나머지 자리 채움
                             rem = config['allocate_count'] - len(raid_list)
                             if rem > 0:
                                 sel = random.sample(available_users, min(len(available_users), rem))
